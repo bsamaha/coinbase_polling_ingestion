@@ -1,0 +1,9 @@
+---
+description: 
+globs: 
+---
+
+# Your rule content
+
+- [.cursorrules](mdc:.cursorrules)
+- You can use markdown but dont have to
