@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import requests  # Ensure this module is installed in your docker image
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 from dotenv import load_dotenv
@@ -28,6 +29,23 @@ class CryptoDataCollector:
         
         logger.info("Creating Coinbase client")
         self.client = CoinbaseClient(api_key=api_key, api_secret=api_secret)
+        
+        # Initialize InfluxDB client
+        influxdb_url = os.getenv('INFLUXDB_URL', 'http://localhost:8086')
+        influxdb_token = os.getenv('INFLUXDB_TOKEN')
+        influxdb_org = os.getenv('INFLUXDB_ORG', 'my-org')
+        influxdb_bucket = os.getenv('INFLUXDB_BUCKET', 'crypto_data')
+        
+        if not influxdb_token:
+            raise ValueError("InfluxDB token not found in environment variables")
+        
+        from src.services.influxdb_client import InfluxDBClientWrapper
+        self.influxdb_client = InfluxDBClientWrapper(
+            url=influxdb_url,
+            token=influxdb_token,
+            org=influxdb_org,
+            bucket=influxdb_bucket
+        )
 
     def get_utc_now(self) -> datetime:
         """Get current UTC time"""
@@ -64,22 +82,18 @@ class CryptoDataCollector:
             return []
 
     async def process_product(self, product: Product) -> Dict[str, Any]:
-        """Process a single product"""
+        """Process a single product by fetching candle data and writing it to InfluxDB."""
         logger.debug(f"Processing product {product.product_id}")
         candles = await self.get_candles(product.product_id)
         
         if candles:
-            print(f"\nCollected data for {product.product_id}")
-            print("-" * 50)
-            for i, candle in enumerate(candles):
-                print(f"Candle {i + 1}:")
-                print(f"  Time: {candle.datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"  Open: ${float(candle.open):.2f}")
-                print(f"  High: ${float(candle.high):.2f}")
-                print(f"  Low: ${float(candle.low):.2f}")
-                print(f"  Close: ${float(candle.close):.2f}")
-                print(f"  Volume: {float(candle.volume):.8f}")
-                print()
+            logger.info(f"Collected {len(candles)} candles for {product.product_id}")
+            try:
+                # Write candle data to InfluxDB
+                self.influxdb_client.write_candles(product.product_id, candles)
+                logger.info(f"Successfully wrote candles for {product.product_id} to InfluxDB")
+            except Exception as e:
+                logger.error(f"Error writing candles for {product.product_id} to InfluxDB: {e}", exc_info=True)
         else:
             logger.warning(f"No candles found for {product.product_id}")
         
@@ -111,9 +125,35 @@ class CryptoDataCollector:
             logger.error(f"Error in collect_data: {e}", exc_info=True)
             return []
 
+async def wait_for_influxdb(url: str, retry_interval: float = 5):
+    """Wait for InfluxDB to be fully initialized and healthy before proceeding."""
+    while True:
+        try:
+            # Attempt to fetch the health endpoint in a thread (since requests is blocking)
+            response = await asyncio.to_thread(requests.get, f"{url}/health", timeout=3)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") == "pass":
+                    logger.info("InfluxDB is healthy!")
+                    break
+                else:
+                    logger.warning(f"InfluxDB health check returned non-pass status: {data}")
+            else:
+                logger.warning(f"InfluxDB health endpoint returned status: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"InfluxDB not ready yet: {e}")
+        logger.info("Waiting for InfluxDB to be ready...")
+        await asyncio.sleep(retry_interval)
+
 async def main() -> None:
     try:
         logger.info("Starting application")
+        
+        # Read InfluxDB URL from environment variables
+        influxdb_url = os.getenv('INFLUXDB_URL', 'http://localhost:8086')
+        logger.info("Waiting for InfluxDB to initialize...")
+        await wait_for_influxdb(influxdb_url)
+        
         collector = CryptoDataCollector()
         
         logger.info("Running initial data collection")
