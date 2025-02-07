@@ -31,29 +31,29 @@ class CoinbaseClient:
             # Clean up old request times
             current_time = time.time()
             request_times = [t for t in request_times if current_time - t < 1.0]
-            
+
             # If we've hit the rate limit, wait until we can make another request
             if len(request_times) >= max_rps:
                 wait_time = 1.0 - (current_time - request_times[0])
                 if wait_time > 0:
                     logger.debug(f"Rate limit reached, waiting {wait_time:.2f}s")
                     await asyncio.sleep(wait_time)
-            
+
             try:
                 result = func(*args, **kwargs)
                 request_times.append(time.time())
-                
+
                 # Update the request times list
                 if is_public:
                     self.public_request_times = request_times
                 else:
                     self.private_request_times = request_times
-                    
+
                 return result
-                
+
             except Exception as e:
                 if "Too many errors" in str(e) or "429" in str(e):
-                    logger.warning(f"Rate limit hit, backing off for 2 seconds...")
+                    logger.warning("Rate limit hit, backing off for 2 seconds...")
                     await asyncio.sleep(2)  # Longer backoff for rate limit errors
                     return await self._rate_limited_request(func, *args, is_public=is_public, **kwargs)
                 raise
@@ -118,21 +118,20 @@ class CoinbaseClient:
                 granularity=api_granularity,
                 is_public=True
             )
-            
+
             if not hasattr(response, 'candles'):
                 logger.error(f"Invalid candle response format for {product_id}")
                 return []
 
             candles = []
             for candle_data in response.candles:
-                candle = Candle.from_response(candle_data)
-                if candle:
+                if candle := Candle.from_response(candle_data):
                     candles.append(candle)
 
             # Sort candles by time and return the last 3
             sorted_candles = sorted(candles, key=lambda x: x.datetime)
             return sorted_candles[-3:] if sorted_candles else []
-            
+
         except Exception as e:
             logger.error(f"Error fetching candles for {product_id}: {e}", exc_info=True)
             return [] 

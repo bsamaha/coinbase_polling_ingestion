@@ -38,7 +38,7 @@ class CryptoDataCollector:
         logger.info("Fetching products from Coinbase")
         try:
             products = await self.client.get_products()
-            logger.info(f"Successfully fetched products")
+            logger.info("Successfully fetched products")
             return products
         except Exception as e:
             logger.error(f"Error fetching products: {e}", exc_info=True)
